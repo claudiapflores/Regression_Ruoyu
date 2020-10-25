@@ -78,7 +78,7 @@ meter_rebate_once <-meter_cons_reg_clean %>%
          account %in% rebate_once$account)
 
 meter_reg <- rbind(meter_nonrebate, meter_rebate_once)
-# I seperate non-rebate and rebate-once people to eliminate multiple-rebate people from this data set and create noises.
+# I separate non-rebate and rebate-once people to eliminate multiple-rebate people from this data set and create noises.
 ```
 
 ```{r}
