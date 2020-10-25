@@ -1,0 +1,92 @@
+---
+title: "Regression Trial"
+author: "Ruoyu Wang"
+date: "10/22/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      warning = FALSE)
+
+library(tidyverse)
+library(janitor)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+library(skimr)
+# library(gt)
+library(tidyr)
+library(here)
+```
+
+```{r raw}
+rebate <- read_csv(here("data","rebate_data_clean_rw.csv"))
+
+rebate_tidy <- rebate %>% 
+  filter(rate_schedule %in% c("R1", "R2"),
+         rebate_year < 2018, 
+         rebate_year > 2009) 
+
+# find accounts which only showed up once in the rebate data/joined one program once
+rebate_once <- rebate_tidy %>% 
+  count(service_address, account) %>% 
+  rename(times = n) %>% 
+  filter(times == 1)
+
+# convert the long format to wide format
+rebate_wide <- rebate_tidy %>% 
+  mutate(HECW = ifelse(rebate_type == "HECW", quantity, "0"),
+         HET = ifelse(rebate_type == "HET", quantity, "0"),
+         TURF = ifelse(rebate_type == "T", quantity, "0"),
+         WBIC = ifelse(rebate_type == "WBIC", quantity, "0"),
+         DI = ifelse(rebate_type == "DI", quantity, "0"),
+         RSN = ifelse(rebate_type == "RSN", quantity, "0"),
+         RB = ifelse(rebate_type == "RB", quantity, "0"))
+```
+
+```{r}
+# get the rebate information based on the list of accounts who only joined one program once
+rebate_once_wide <- rebate_wide %>% 
+  filter(service_address %in% rebate_once$service_address,
+         account %in% rebate_once$account)
+
+# prepare to join with consumption data
+rebate_once_wide_tidy <- rebate_once_wide %>% 
+  select(-rebate_type,-quantity, -rebate_date, -rate_schedule) %>% 
+  rename(year = rebate_year, month = rebate_month)
+```
+
+```{r}
+# read in an intermediate dataset with consumption and customer characteristics (I made)
+meter_cons_reg <- read_csv(here("data", "consumption_characteristics_regression_2010-01-01.csv"))
+
+# clean and prep for the regression
+meter_cons_reg_clean <- meter_cons_reg %>% 
+  select(-ymd_bill, -cust_class, 
+         -year_effective, -year_ending_effective) %>% 
+  rename(year = year_bill,
+         month = month_bill)
+
+meter_nonrebate <- meter_cons_reg_clean %>% 
+  filter(!service_address %in% rebate$service_address,
+         !account %in% rebate$account)
+
+meter_rebate_once <-meter_cons_reg_clean %>% 
+  filter(service_address %in% rebate_once$service_address,
+         account %in% rebate_once$account)
+
+meter_reg <- rbind(meter_nonrebate, meter_rebate_once)
+# I seperate non-rebate and rebate-once people to eliminate multiple-rebate people from this data set and create noises.
+```
+
+```{r}
+# left join means: keep all the rows of dataframe 1, only keep the contents in dataframe 2 when they can match certain information in dataframe 1. Be careful of other kinds of join or merge if you don't understand how it works.
+
+reg_df <- left_join(meter_reg, rebate_once_wide_tidy, 
+                    by = c("service_address", "account", "year", "month"))
+```
+
+Current idea: need to duplicate the rebate information after the rebate started until the study ended (Dec 2017).
+Other NAs can be replaced into 0.
