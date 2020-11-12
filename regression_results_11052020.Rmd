@@ -1,0 +1,109 @@
+---
+title: "play with merged data"
+author: "Ruoyu Wang"
+date: "10/29/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      warning = FALSE)
+
+library(tidyverse)
+library(janitor)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+library(skimr)
+# library(gt)
+library(tidyr)
+library(here)
+library(stargazer)
+```
+
+```{r read-in}
+merged <- read_csv(here("data", "merged.csv"))
+
+customer <- read_csv(here("data", "customer_characteristics_clean_rw.csv"))
+
+merged_select <- merged %>% 
+  filter(service_address %in% unique(customer$service_address))
+
+merged_cust <- left_join(merged, customer, by = "service_address")
+```
+
+```{r}
+merged_cust_clean <- merged_cust %>% 
+  filter(meter_consumption > 0) %>% 
+  select(-date_effective_rates, -date_ending_effective,
+         -year_effective, -year_ending_effective) %>% 
+  filter(rate_schedule %in% c("R1", "R2")) %>% 
+  select(-CCW, -IMM, -LRS, -RWR, -WU, -WCTCC)
+```
+
+CCW, IMM, LRS, RWR, WU, WCTCC, 
+
+```{r}
+merged_reg <- merged_cust_clean %>% 
+  select(-service_address, -account) %>% 
+  mutate(date = date(date)) %>% 
+  mutate(year = year(date),
+         month = month(date)) %>% 
+  filter(!date == "2011-02-01") %>% 
+  select(-date)
+```
+
+```{r}
+merged_class <- merged_reg %>% 
+  mutate(year = as.character(year)) %>% 
+  transform(month = factor(format(month, format = "%m"))) %>% 
+  # mutate(month = fct_relevel(month)) %>% 
+  rename(water_use = meter_consumption,
+         TURF = T) %>% 
+  filter(cust_class == "SFR") %>% 
+  select(-cust_class) 
+```
+
+```{r}
+fit_full <- lm(data = merged_class,
+          water_use ~ year + month + rate_schedule + number_of_residents + square_feet + DI + HECW + HET + RB + RSN + SSMS + TURF + WB + WBIC)
+# R2 = 0.4104
+
+fit2 <- lm(data = merged_class,
+          water_use ~ year + rate_schedule + number_of_residents + square_feet + DI + HECW + HET + RB + RSN + SSMS + TURF + WB + WBIC)
+# without month, the R2 decrease, R2 = 0.3828
+
+fit3 <- lm(data = merged_class,
+          water_use ~ year + month + rate_schedule + number_of_residents + square_feet + DI + HECW + HET + RB  + SSMS + TURF + WB )
+# without RSN, WBIC, R2 = 0.4104, almost the same with full variable regression
+
+fit4 <- lm(data = merged_class,
+          water_use ~ year + month + number_of_residents + square_feet + DI + HECW + HET + RB + RSN + SSMS + TURF + WB + WBIC)
+# without rate schedule, R2 decreases, = 0.3957
+
+fit_5 <- lm(data = merged_class,
+          water_use ~ year + month + rate_schedule + DI + HECW + HET + RB + RSN + SSMS + TURF + WB + WBIC)
+# without # of residents and irrigation area, R2 drops, = 0.1687
+
+#summary(fit_full)
+# summary(fit2)
+#summary(fit3)
+#summary(fit_4)
+#summary(fit_5)
+
+AIC(fit_full)
+AIC(fit2)
+AIC(fit3)
+AIC(fit4)
+AIC(fit_5)
+
+```
+
+```{r regression_table, results = "asis"}
+# Made a nice regression table with three models created above.
+stargazer(fit_full, fit2, fit3, fit4, fit_5, type = "html", 
+          align = TRUE, dep.var.labels="Water use per household per month (ccf)",
+          omit.stat=c("LL","ser","f"), 
+          no.space=FALSE)
+```
