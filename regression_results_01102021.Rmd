@@ -1,0 +1,196 @@
+---
+title: "play with merged data"
+author: "Ruoyu Wang"
+date: "10/29/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      warning = FALSE)
+
+library(tidyverse)
+library(janitor)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+library(skimr)
+# library(gt)
+library(tidyr)
+library(here)
+library(stargazer)
+```
+
+```{r read-in-data}
+# 1. read in the water consumption + rebate dataset created by Nik
+merged <- read_csv(here("data", "merged_NG.csv"))
+
+# 2. read in the customer characteristics data
+customer <- read_csv(here("data", "customer_characteristics_clean_rw.csv"))
+
+# 3. clean up Nik's dataset by only keeping those customers in the "customer" dataset
+merged_select <- merged %>% 
+  filter(service_address %in% unique(customer$service_address))
+
+# 4. read et and rainfall data (temporal diff only)
+et <- read_csv("ET_precipitation_ave_2010-01.csv") %>% 
+  mutate(date = mdy(date)) %>% 
+  rename(et = et_ave_inches_per_month,
+         rain = precipitation_ave_inches_per_month)
+
+# 5. merge Nik's data. customer characteristics data and et data
+merged_cust <- left_join(merged, customer, by = c("service_address", "account"))
+
+merged_cust_et <- left_join(merged_cust, et, by = "date")
+```
+
+```{r pkb}
+# Look in the dataset Pat created (didn't use in next steps)
+# merged2 <- read_csv(here("data", "merged_PKB.csv"))
+# same problem's still there 2011-02-01, the rebate becomes 0 again
+```
+
+
+```{r clean-data}
+# Trail.1: did not include et data
+merged_cust_clean <- merged_cust %>%
+  filter(meter_consumption > 0) %>%
+  select(-date_effective_rates, -date_ending_effective,
+         -year_effective, -year_ending_effective) %>%
+  filter(rate_schedule %in% c("R1", "R2")) %>%
+  select(-CCW, -IMM, -LRS, -RWR, -WU, -WCTCC, -SSMS, -WB) %>% 
+  mutate(DI = replace_na(DI, 0),
+         HECW = replace_na(HECW, 0),
+         HET = replace_na(HET, 0),
+         RB = replace_na(RB, 0),
+         T = replace_na(T, 0),
+         RSN = replace_na(RSN, 0),
+         WBIC = replace_na(WBIC, 0))
+
+# Trail.2: clean up datasets by excluding unnecessary columns and fill in empty cells
+merged_cust_et_clean <- merged_cust_et %>% 
+  filter(meter_consumption > 0) %>% 
+  select(-date_effective_rates, -date_ending_effective,
+         -year_effective, -year_ending_effective) %>% 
+  filter(rate_schedule %in% c("R1", "R2")) %>% 
+  select(-CCW, -IMM, -LRS, -RWR, -WU, -WCTCC, -SSMS, -WB) %>% 
+  mutate(DI = replace_na(DI, 0),
+         HECW = replace_na(HECW, 0),
+         HET = replace_na(HET, 0),
+         RB = replace_na(RB, 0),
+         T = replace_na(T, 0),
+         RSN = replace_na(RSN, 0),
+         WBIC = replace_na(WBIC, 0))
+
+```
+
+No customer (at least for the residential SFR R1 and R2 customers) joined CCW, IMM, LRS, RWR, WU, WCTCC, SSMS, WB through the entire study time period.
+
+```{r}
+# Trail.1: did not include et data
+merged_reg <- merged_cust_clean %>%
+  select(-service_address, -account) %>%
+  mutate(date = date(date)) %>%
+  mutate(year = year(date),
+         month = month(date)) %>%
+  filter(!date == "2011-02-01") %>%
+  select(-date)
+
+# trail.2: further remove the columns that won't be used in regression model
+merged_et_reg <- merged_cust_et_clean %>% 
+  select(-service_address, -account) %>% 
+  mutate(date = date(date)) %>% 
+  mutate(year = year(date),
+         month = month(date)) %>% 
+  filter(!date == "2011-02-01") %>% # the abnormal time
+  select(-date) 
+
+```
+
+```{r}
+# Trail.1: did not include et data (for comparison)
+merged_class <- merged_reg %>%
+  mutate(year = as.character(year)) %>%
+  transform(month = factor(format(month, format = "%m"))) %>%
+  # mutate(month = fct_relevel(month)) %>%
+  rename(water_use = meter_consumption,
+         TURF = T) %>%
+  filter(cust_class == "SFR") %>%
+  select(-cust_class)
+
+# trail.2: clean up dates and exclude some outliners
+merged_et_class <- merged_et_reg %>% 
+  mutate(year = as.character(year)) %>% 
+  transform(month = factor(format(month, format = "%m"))) %>% 
+  # mutate(month = fct_relevel(month)) %>% 
+  rename(water_use = meter_consumption,
+         TURF = T) %>% 
+  filter(cust_class == "SFR") %>% 
+  select(-cust_class) %>% 
+  filter(water_use<1000) # try to exclude some outliners (i.e., heavy water users)
+
+# try to find out how many customers/records used more than 400 ccf for one month
+merge_filter <- merged_et_class %>% 
+  filter(water_use > 400)
+
+# look at the distribution of water use and other parameters
+skim(merged_et_class) 
+```
+
+
+```{r models}
+# Trail.1: no et data, but play with diff parameters
+fit_full <- lm(data = merged_class,
+          water_use ~ year + month + rate_schedule + number_of_residents + square_feet + DI + HECW + HET + RB + RSN + TURF + WBIC)
+# R2 = 0.4104
+
+fit2 <- lm(data = merged_class,
+          water_use ~ year + rate_schedule + number_of_residents + square_feet + DI + HECW + HET + RB + RSN + TURF + WBIC)
+# without month, the R2 decrease, R2 = 0.3828
+
+fit3 <- lm(data = merged_class,
+          water_use ~ year + month + rate_schedule + number_of_residents + square_feet + DI + HECW + HET + RB + TURF )
+# without RSN, WBIC, R2 = 0.4104, almost the same with full variable regression
+
+fit4 <- lm(data = merged_class,
+          water_use ~ year + month + number_of_residents + square_feet + DI + HECW + HET + RB + RSN + TURF + WBIC)
+# without rate schedule, R2 decreases, = 0.3957
+
+fit_5 <- lm(data = merged_class,
+          water_use ~ year + month + rate_schedule + DI + HECW + HET + RB + RSN + TURF + WBIC)
+# without # of residents and irrigation area, R2 drops, = 0.1687
+
+#summary(fit_full)
+#summary(fit2)
+#summary(fit3)
+#summary(fit_4)
+#summary(fit_5)
+
+# AIC(fit_full)
+# AIC(fit2)
+# AIC(fit3)
+# AIC(fit4)
+# AIC(fit_5)
+```
+
+```{r}
+# Trail.2: with et data
+fit_et <- lm(data = merged_et_class,
+          water_use ~ year + month + rate_schedule + number_of_residents + square_feet + et + rain + DI + HECW + HET + RB + RSN + TURF + WBIC)
+# R2 = 0.4104
+
+summary(fit_et)
+# R2 = 0.4108
+# update Dec 1 use the updated dataset: R2=0.4275 (+:DI,HET,RSN)
+# update Dec 8: remove the records that water use > 1000 , R2=0.4413 (+:DI,HET,RSN)
+# but keeping the records that water use < 100 will decrease R2
+```
+
+```{r regression_table, results = "asis"}
+# Made a nice regression table with three models created above. (only work in the knitted html)
+stargazer(fit_full, fit2, fit3, fit4, fit_5,fit_et, type = "html", 
+          align = TRUE, dep.var.labels="Water use per household per month (ccf)",
+          omit.stat=c("LL","ser","f"), 
+          no.space=FALSE)
+```
